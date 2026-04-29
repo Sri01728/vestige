@@ -33,6 +33,24 @@ pub struct McpServer {
     event_tx: Option<broadcast::Sender<VestigeEvent>>,
 }
 
+fn build_instructions() -> String {
+    let mode = std::env::var("VESTIGE_SYSTEM_PROMPT_MODE").unwrap_or_default();
+    if mode.eq_ignore_ascii_case("full") {
+        "Vestige is your long-term cognitive memory AND reasoning engine, not a RAG database. \
+         Every retrieval MUST be composed into a recommendation, never summarized.\
+         \n\nFeedback Protocol: If the user explicitly confirms a memory was helpful, use \
+         memory(action='promote'). If they correct a hallucination or say a memory was wrong, use \
+         memory(action='demote'). Do not ask for permission - just act on their feedback.".to_string()
+    } else {
+        "Vestige is your long-term memory system. Use it to remember important information, \
+         recall past knowledge, and maintain context across sessions. The system uses \
+         FSRS-6 spaced repetition to naturally decay memories over time. \
+         \n\nFeedback Protocol: If the user explicitly confirms a memory was helpful, use \
+         memory(action='promote'). If they correct a hallucination or say a memory was wrong, use \
+         memory(action='demote'). Do not ask for permission - just act on their feedback.".to_string()
+    }
+}
+
 impl McpServer {
     #[allow(dead_code)]
     pub fn new(storage: Arc<Storage>, cognitive: Arc<Mutex<CognitiveEngine>>) -> Self {
@@ -157,14 +175,7 @@ impl McpServer {
                 }),
                 prompts: None,
             },
-            instructions: Some(
-                "Vestige is your long-term memory system. Use it to remember important information, \
-                 recall past knowledge, and maintain context across sessions. The system uses \
-                 FSRS-6 spaced repetition to naturally decay memories over time. \
-                 \n\nFeedback Protocol: If the user explicitly confirms a memory was helpful, use \
-                 memory(action='promote'). If they correct a hallucination or say a memory was wrong, use \
-                 memory(action='demote'). Do not ask for permission - just act on their feedback.".to_string()
-            ),
+            instructions: Some(build_instructions()),
         };
 
         serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(&e.to_string()))
@@ -1320,6 +1331,7 @@ impl McpServer {
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.0);
                 self.emit(VestigeEvent::ImportanceScored {
+                    memory_id: None,
                     content_preview: preview,
                     composite_score: composite,
                     novelty,

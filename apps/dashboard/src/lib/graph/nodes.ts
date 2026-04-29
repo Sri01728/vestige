@@ -47,10 +47,24 @@ export const MEMORY_STATE_DESCRIPTIONS: Record<MemoryState, string> = {
 	unavailable: 'Needs reinforcement (< 10%)',
 };
 
-/// Color mode controls whether node spheres are tinted by node type
-/// (fact / concept / event / …) or by FSRS memory state.
+export type AhaGraphKind = 'aha' | 'confusion' | 'failure';
+
+export const AHAGRAPH_COLORS: Record<AhaGraphKind, string> = {
+	aha: '#FFD700',
+	confusion: '#EF4444',
+	failure: '#9CA3AF',
+};
+
+export const AHAGRAPH_DESCRIPTIONS: Record<AhaGraphKind, string> = {
+	aha: 'Aha moments and breakthroughs',
+	confusion: 'Confusions and weak spots',
+	failure: 'Failures and guardrails',
+};
+
+/// Color mode controls whether node spheres are tinted by node type,
+/// FSRS memory state, or AhaGraph learning tags.
 /// Type mode is the long-standing default; state mode is the v2.0.8 addition.
-export type ColorMode = 'type' | 'state';
+export type ColorMode = 'type' | 'state' | 'ahagraph';
 
 /// Pick a hex colour for a node given the active colour mode.
 /// Falls back to the grey `unavailable` tone if the node's type is unknown.
@@ -58,7 +72,18 @@ export function getNodeColor(node: GraphNode, mode: ColorMode): string {
 	if (mode === 'state') {
 		return MEMORY_STATE_COLORS[getMemoryState(node.retention)];
 	}
+	if (mode === 'ahagraph') {
+		return getAhaGraphColor(node) ?? NODE_TYPE_COLORS[node.type] ?? '#8B95A5';
+	}
 	return NODE_TYPE_COLORS[node.type] || '#8B95A5';
+}
+
+export function getAhaGraphColor(node: Pick<GraphNode, 'tags'>): string | null {
+	const tags = new Set((node.tags ?? []).map((tag) => tag.toLowerCase()));
+	if (tags.has('aha')) return AHAGRAPH_COLORS.aha;
+	if (tags.has('confusion') || tags.has('weak-spot')) return AHAGRAPH_COLORS.confusion;
+	if (tags.has('failure') || tags.has('guardrail')) return AHAGRAPH_COLORS.failure;
+	return null;
 }
 
 // Shared radial-gradient texture used for every node's glow Sprite.
@@ -139,8 +164,8 @@ export class NodeManager {
 	labelSprites = new Map<string, THREE.Sprite>();
 	hoveredNode: string | null = null;
 	selectedNode: string | null = null;
-	/// v2.0.8: colour nodes by FSRS memory state (active/dormant/silent/unavailable)
-	/// instead of node type. Switched at runtime via `setColorMode`.
+	/// Colour nodes by type, FSRS state, or AhaGraph learning tags.
+	/// Switched at runtime via `setColorMode`.
 	colorMode: ColorMode = 'type';
 
 	private materializingNodes: MaterializingNode[] = [];
@@ -161,12 +186,15 @@ export class NodeManager {
 		for (const [id, mesh] of this.meshMap) {
 			const retention = (mesh.userData.retention as number | undefined) ?? 0;
 			const type = (mesh.userData.type as string | undefined) ?? 'fact';
+			const tags = Array.isArray(mesh.userData.tags)
+				? (mesh.userData.tags as string[])
+				: [];
 			const stubNode = {
 				id,
 				label: '',
 				type,
 				retention,
-				tags: [],
+				tags,
 				createdAt: '',
 				updatedAt: '',
 				isCenter: false,
@@ -236,7 +264,7 @@ export class NodeManager {
 		const mesh = new THREE.Mesh(geometry, material);
 		mesh.position.copy(pos);
 		mesh.scale.setScalar(initialScale);
-		mesh.userData = { nodeId: node.id, type: node.type, retention: node.retention };
+		mesh.userData = { nodeId: node.id, type: node.type, retention: node.retention, tags: node.tags };
 		this.meshMap.set(node.id, mesh);
 		this.group.add(mesh);
 

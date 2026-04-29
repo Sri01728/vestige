@@ -31,8 +31,11 @@ use vestige_mcp::cognitive;
 use vestige_mcp::protocol;
 use vestige_mcp::server;
 
+use directories::BaseDirs;
+use std::ffi::OsString;
+use std::fs;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{Level, error, info, warn};
@@ -44,6 +47,9 @@ use vestige_core::Storage;
 use protocol::stdio::StdioTransport;
 use server::McpServer;
 
+const DATA_DIR_ENV: &str = "VESTIGE_DATA_DIR";
+const DATABASE_FILE: &str = "vestige.db";
+
 /// Parsed CLI configuration.
 struct Config {
     data_dir: Option<PathBuf>,
@@ -51,11 +57,24 @@ struct Config {
     dashboard_enabled: bool,
 }
 
+fn data_dir_from_env() -> Option<PathBuf> {
+    std::env::var_os(DATA_DIR_ENV).and_then(|value| {
+        if value.as_os_str().is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(value))
+        }
+    })
+}
+
 /// Parse command-line arguments into a `Config`.
 /// Exits the process if `--help` or `--version` is requested.
 fn parse_args() -> Config {
-    let args: Vec<String> = std::env::args().collect();
-    let mut data_dir: Option<PathBuf> = None;
+    parse_args_from(std::env::args_os().collect(), data_dir_from_env())
+}
+
+fn parse_args_from(args: Vec<OsString>, env_data_dir: Option<PathBuf>) -> Config {
+    let mut data_dir = env_data_dir;
     let mut http_port: u16 = std::env::var("VESTIGE_HTTP_PORT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -66,7 +85,8 @@ fn parse_args() -> Config {
     let mut i = 1;
 
     while i < args.len() {
-        match args[i].as_str() {
+        let arg = args[i].to_string_lossy();
+        match arg.as_ref() {
             "--help" | "-h" => {
                 println!("Vestige MCP Server v{}", env!("CARGO_PKG_VERSION"));
                 println!();
@@ -78,10 +98,15 @@ fn parse_args() -> Config {
                 println!("OPTIONS:");
                 println!("    -h, --help              Print help information");
                 println!("    -V, --version           Print version information");
-                println!("    --data-dir <PATH>       Custom data directory");
+                println!(
+                    "    --data-dir <PATH>       Custom data directory (overrides VESTIGE_DATA_DIR)"
+                );
                 println!("    --http-port <PORT>      HTTP transport port (default: 3928)");
                 println!();
                 println!("ENVIRONMENT:");
+                println!(
+                    "    VESTIGE_DATA_DIR          Data directory fallback (stores vestige.db inside)"
+                );
                 println!(
                     "    RUST_LOG                  Log level filter (e.g., debug, info, warn, error)"
                 );
@@ -98,6 +123,7 @@ fn parse_args() -> Config {
                 println!("EXAMPLES:");
                 println!("    vestige-mcp");
                 println!("    vestige-mcp --data-dir /custom/path");
+                println!("    VESTIGE_DATA_DIR=~/.vestige vestige-mcp");
                 println!("    vestige-mcp --http-port 8080");
                 println!("    RUST_LOG=debug vestige-mcp");
                 std::process::exit(0);
@@ -110,6 +136,11 @@ fn parse_args() -> Config {
                 i += 1;
                 if i >= args.len() {
                     eprintln!("error: --data-dir requires a path argument");
+                    eprintln!("Usage: vestige-mcp --data-dir <PATH>");
+                    std::process::exit(1);
+                }
+                if args[i].as_os_str().is_empty() {
+                    eprintln!("error: --data-dir requires a non-empty path argument");
                     eprintln!("Usage: vestige-mcp --data-dir <PATH>");
                     std::process::exit(1);
                 }
@@ -132,10 +163,11 @@ fn parse_args() -> Config {
                     eprintln!("Usage: vestige-mcp --http-port <PORT>");
                     std::process::exit(1);
                 }
-                http_port = match args[i].parse() {
+                let port = args[i].to_string_lossy();
+                http_port = match port.parse() {
                     Ok(p) => p,
                     Err(_) => {
-                        eprintln!("error: invalid port number '{}'", args[i]);
+                        eprintln!("error: invalid port number '{}'", port);
                         std::process::exit(1);
                     }
                 };
@@ -167,6 +199,42 @@ fn parse_args() -> Config {
     }
 }
 
+fn expand_tilde(path: PathBuf) -> PathBuf {
+    let rest = {
+        let mut components = path.components();
+        match components.next() {
+            Some(Component::Normal(first)) if first == "~" => {
+                Some(components.as_path().to_path_buf())
+            }
+            _ => None,
+        }
+    };
+
+    match rest {
+        Some(rest) => BaseDirs::new()
+            .map(|dirs| dirs.home_dir().join(rest))
+            .unwrap_or(path),
+        None => path,
+    }
+}
+
+fn prepare_storage_path(data_dir: Option<PathBuf>) -> io::Result<Option<PathBuf>> {
+    let Some(data_dir) = data_dir else {
+        return Ok(None);
+    };
+
+    let data_dir = expand_tilde(data_dir);
+    fs::create_dir_all(&data_dir)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700));
+    }
+
+    Ok(Some(data_dir.join(DATABASE_FILE)))
+}
+
 #[tokio::main]
 async fn main() {
     // Parse CLI arguments first (before logging init, so --help/--version work cleanly)
@@ -185,8 +253,17 @@ async fn main() {
         env!("CARGO_PKG_VERSION")
     );
 
-    // Initialize storage with optional custom data directory
-    let storage = match Storage::new(config.data_dir) {
+    let storage_path = match prepare_storage_path(config.data_dir) {
+        Ok(path) => path,
+        Err(e) => {
+            error!("Failed to prepare storage data directory: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Initialize storage with optional custom data directory.
+    // Storage::new(Some(...)) expects a DB file path, so map data dirs to vestige.db here.
+    let storage = match Storage::new(storage_path) {
         Ok(s) => {
             info!("Storage initialized successfully");
 
@@ -309,6 +386,20 @@ async fn main() {
     let (event_tx, _) =
         tokio::sync::broadcast::channel::<vestige_mcp::dashboard::events::VestigeEvent>(1024);
 
+    // v2.0.9 "Autopilot" — spawn the backend event-subscriber that routes
+    // every live WebSocket event into the cognitive modules that already
+    // have trigger methods implemented. Without this, the 20 event types
+    // terminate at the dashboard and the cognitive engine is a passive
+    // library that only responds to MCP tool queries.
+    //
+    // See `crates/vestige-mcp/src/autopilot.rs` for the routing table and
+    // `docs/VESTIGE_STATE_AND_PLAN.md` §15 for the architectural rationale.
+    vestige_mcp::autopilot::spawn(
+        Arc::clone(&cognitive),
+        Arc::clone(&storage),
+        event_tx.clone(),
+    );
+
     // Spawn dashboard HTTP server alongside MCP server (now with CognitiveEngine access)
     if config.dashboard_enabled {
         let dashboard_port = std::env::var("VESTIGE_DASHBOARD_PORT")
@@ -402,4 +493,58 @@ async fn main() {
     }
 
     info!("Vestige MCP Server shutting down");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn os_args(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn vestige_data_dir_env_is_used_when_cli_data_dir_is_absent() {
+        let config = parse_args_from(
+            os_args(&["vestige-mcp"]),
+            Some(PathBuf::from("/tmp/vestige-env")),
+        );
+
+        assert_eq!(config.data_dir, Some(PathBuf::from("/tmp/vestige-env")));
+    }
+
+    #[test]
+    fn cli_data_dir_takes_precedence_over_env_data_dir() {
+        let config = parse_args_from(
+            os_args(&["vestige-mcp", "--data-dir", "/tmp/vestige-cli"]),
+            Some(PathBuf::from("/tmp/vestige-env")),
+        );
+
+        assert_eq!(config.data_dir, Some(PathBuf::from("/tmp/vestige-cli")));
+    }
+
+    #[test]
+    fn prepare_storage_path_creates_dir_and_points_to_vestige_db() {
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("nested").join("vestige");
+
+        let db_path = prepare_storage_path(Some(data_dir.clone())).unwrap();
+
+        assert!(data_dir.is_dir());
+        assert_eq!(db_path, Some(data_dir.join(DATABASE_FILE)));
+    }
+
+    #[test]
+    fn expand_tilde_expands_current_users_home_only() {
+        let home = BaseDirs::new().unwrap().home_dir().to_path_buf();
+
+        assert_eq!(
+            expand_tilde(PathBuf::from("~/vestige")),
+            home.join("vestige")
+        );
+        assert_eq!(
+            expand_tilde(PathBuf::from("~other/vestige")),
+            PathBuf::from("~other/vestige")
+        );
+    }
 }
