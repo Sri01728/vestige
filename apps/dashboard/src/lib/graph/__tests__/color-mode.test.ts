@@ -16,7 +16,9 @@ vi.mock('three', async () => {
 import {
 	NodeManager,
 	getMemoryState,
+	getAhaGraphColor,
 	getNodeColor,
+	AHAGRAPH_COLORS,
 	MEMORY_STATE_COLORS,
 	MEMORY_STATE_DESCRIPTIONS,
 	type MemoryState,
@@ -210,6 +212,31 @@ describe('getNodeColor — state mode', () => {
 	});
 });
 
+describe('getNodeColor — AhaGraph mode', () => {
+	it.each([
+		[['ahagraph', 'aha'], AHAGRAPH_COLORS.aha],
+		[['ahagraph', 'confusion'], AHAGRAPH_COLORS.confusion],
+		[['ahagraph', 'weak-spot'], AHAGRAPH_COLORS.confusion],
+		[['ahagraph', 'failure'], AHAGRAPH_COLORS.failure],
+		[['ahagraph', 'guardrail'], AHAGRAPH_COLORS.failure],
+	] as Array<[string[], string]>)('maps tags %j to %s', (tags, color) => {
+		const node = makeNode({ type: 'concept', tags });
+		expect(getAhaGraphColor(node)).toBe(color);
+		expect(getNodeColor(node, 'ahagraph')).toBe(color);
+	});
+
+	it('prioritizes aha when a note also mentions confusion tags', () => {
+		const node = makeNode({ type: 'note', tags: ['ahagraph', 'aha', 'confusion'] });
+		expect(getNodeColor(node, 'ahagraph')).toBe(AHAGRAPH_COLORS.aha);
+	});
+
+	it('falls back to node type when no AhaGraph learning tag is present', () => {
+		const node = makeNode({ type: 'event', tags: ['ahagraph'] });
+		expect(getAhaGraphColor(node)).toBeNull();
+		expect(getNodeColor(node, 'ahagraph')).toBe(NODE_TYPE_COLORS.event);
+	});
+});
+
 // ----------------------------------------------------------------------------
 // NodeManager — default state + colorMode field
 // ----------------------------------------------------------------------------
@@ -234,6 +261,11 @@ describe('NodeManager — colorMode field', () => {
 	it('setColorMode("state") updates the field', () => {
 		manager.setColorMode('state');
 		expect(manager.colorMode).toBe('state');
+	});
+
+	it('setColorMode("ahagraph") updates the field', () => {
+		manager.setColorMode('ahagraph');
+		expect(manager.colorMode).toBe('ahagraph');
 	});
 
 	it('setColorMode("type") is no-op when already "type" (idempotent early return)', () => {

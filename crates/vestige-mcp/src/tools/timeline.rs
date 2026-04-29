@@ -136,7 +136,7 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
             end,
             limit,
             args.node_type.as_deref(),
-            None,
+            args.tags.as_deref(),
         )
         .map_err(|e| e.to_string())?;
 
@@ -207,12 +207,7 @@ mod tests {
 
     /// Ingest with explicit node_type and tags. Used by the sparse-filter
     /// regression tests so the dominant and sparse sets can be told apart.
-    async fn ingest_typed(
-        storage: &Arc<Storage>,
-        content: &str,
-        node_type: &str,
-        tags: &[&str],
-    ) {
+    async fn ingest_typed(storage: &Arc<Storage>, content: &str, node_type: &str, tags: &[&str]) {
         storage
             .ingest(vestige_core::IngestInput {
                 content: content.to_string(),
@@ -392,11 +387,23 @@ mod tests {
 
         // Dominant set: 10 facts
         for i in 0..10 {
-            ingest_typed(&storage, &format!("Dominant memory {}", i), "fact", &["alpha"]).await;
+            ingest_typed(
+                &storage,
+                &format!("Dominant memory {}", i),
+                "fact",
+                &["alpha"],
+            )
+            .await;
         }
         // Sparse set: 2 concepts
         for i in 0..2 {
-            ingest_typed(&storage, &format!("Sparse memory {}", i), "concept", &["beta"]).await;
+            ingest_typed(
+                &storage,
+                &format!("Sparse memory {}", i),
+                "concept",
+                &["beta"],
+            )
+            .await;
         }
 
         // Limit 5 against 12 total — before the fix, `retain` on `concept`
@@ -426,7 +433,13 @@ mod tests {
 
         // Dominant set: 10 memories with tag "common"
         for i in 0..10 {
-            ingest_typed(&storage, &format!("Common memory {}", i), "fact", &["common"]).await;
+            ingest_typed(
+                &storage,
+                &format!("Common memory {}", i),
+                "fact",
+                &["common"],
+            )
+            .await;
         }
         // Sparse set: 2 memories with tag "rare"
         for i in 0..2 {

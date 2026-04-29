@@ -114,15 +114,18 @@ pub async fn execute(
             degraded = true;
             Vec::new()
         });
-    let accuracy = cog.predictive_memory.prediction_accuracy().unwrap_or_else(|e| {
-        tracing::warn!(
-            target: "vestige::predict",
-            error = %e,
-            "prediction_accuracy failed; returning 0.0"
-        );
-        degraded = true;
-        0.0
-    });
+    let accuracy = cog
+        .predictive_memory
+        .prediction_accuracy()
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                target: "vestige::predict",
+                error = %e,
+                "prediction_accuracy failed; returning 0.0"
+            );
+            degraded = true;
+            0.0
+        });
 
     // Build speculative context
     let speculative_context = vestige_core::PredictionContext {

@@ -694,11 +694,9 @@ pub async fn execute(
     // embedding space — even though the winning memory contains neither
     // "FSRS-6" nor anything about spaced repetition).
     const TOPIC_STOPWORDS: &[&str] = &[
-        "how", "what", "when", "where", "why", "who", "which",
-        "does", "did", "is", "are", "was", "were", "will",
-        "the", "and", "for", "with", "this", "that",
-        "work", "works", "use", "uses", "used", "using",
-        "about", "from", "into", "than", "then",
+        "how", "what", "when", "where", "why", "who", "which", "does", "did", "is", "are", "was",
+        "were", "will", "the", "and", "for", "with", "this", "that", "work", "works", "use",
+        "uses", "used", "using", "about", "from", "into", "than", "then",
     ];
     let topic_terms: Vec<String> = args
         .query
@@ -762,15 +760,12 @@ pub async fn execute(
         &non_superseded_all
     };
 
-    let recommended = primary_pool
-        .iter()
-        .copied()
-        .max_by(|a, b| {
-            composite(a)
-                .partial_cmp(&composite(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.updated_at.cmp(&b.updated_at))
-        });
+    let recommended = primary_pool.iter().copied().max_by(|a, b| {
+        composite(a)
+            .partial_cmp(&composite(b))
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.updated_at.cmp(&b.updated_at))
+    });
 
     // ====================================================================
     // STAGE 7: Relation Assessment (per-pair, using trust + temporal + similarity)

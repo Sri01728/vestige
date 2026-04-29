@@ -67,26 +67,25 @@ pub async fn execute(storage: &Arc<Storage>, args: Option<Value>) -> Result<Valu
 
     // Try parsing as wrapped format first (MCP response wrapper),
     // then fall back to direct RecallResult
-    let memories: Vec<MemoryBackup> = if let Ok(wrapper) =
-        serde_json::from_str::<Vec<BackupWrapper>>(&backup_content)
-    {
-        if let Some(first) = wrapper.first() {
-            let recall: RecallResult = serde_json::from_str(&first.text)
-                .map_err(|e| format!("Failed to parse backup contents: {}", e))?;
+    let memories: Vec<MemoryBackup> =
+        if let Ok(wrapper) = serde_json::from_str::<Vec<BackupWrapper>>(&backup_content) {
+            if let Some(first) = wrapper.first() {
+                let recall: RecallResult = serde_json::from_str(&first.text)
+                    .map_err(|e| format!("Failed to parse backup contents: {}", e))?;
+                recall.results
+            } else {
+                return Err("Empty backup file".to_string());
+            }
+        } else if let Ok(recall) = serde_json::from_str::<RecallResult>(&backup_content) {
             recall.results
+        } else if let Ok(nodes) = serde_json::from_str::<Vec<MemoryBackup>>(&backup_content) {
+            nodes
         } else {
-            return Err("Empty backup file".to_string());
-        }
-    } else if let Ok(recall) = serde_json::from_str::<RecallResult>(&backup_content) {
-        recall.results
-    } else if let Ok(nodes) = serde_json::from_str::<Vec<MemoryBackup>>(&backup_content) {
-        nodes
-    } else {
-        return Err(
+            return Err(
             "Unrecognized backup format. Expected MCP wrapper, RecallResult, or array of memories."
                 .to_string(),
         );
-    };
+        };
 
     let total = memories.len();
     if total == 0 {

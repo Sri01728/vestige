@@ -2132,7 +2132,7 @@ impl Storage {
         end: Option<DateTime<Utc>>,
         limit: i32,
         _node_type: Option<&str>,
-        _tags: Option<&str>,
+        _tags: Option<&[String]>,
     ) -> Result<Vec<KnowledgeNode>> {
         let start_str = start.map(|dt| dt.to_rfc3339());
         let end_str = end.map(|dt| dt.to_rfc3339());
